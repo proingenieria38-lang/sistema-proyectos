@@ -1007,14 +1007,15 @@ async function restoreSession(){
   return true;
 }
 
-async function logout(){
+async function logout(showInactivityMessage){
+  stopBackgroundTasks();
   await sb.auth.signOut();
   currentUser = null;
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('loginUser').value = '';
   document.getElementById('loginPass').value = '';
-  document.getElementById('loginError').textContent = '';
+  document.getElementById('loginError').textContent = showInactivityMessage ? 'Se cerró la sesión por inactividad.' : '';
 }
 
 function isReadOnly(){ return currentUser && currentUser.role === 'readonly'; }
@@ -2188,6 +2189,57 @@ function init(){
   renderRows();
 }
 
+/* ================= SINCRONIZACIÓN AUTOMÁTICA E INACTIVIDAD ================= */
+let refreshIntervalId = null;
+let inactivityIntervalId = null;
+let lastActivityTime = Date.now();
+const INACTIVITY_LIMIT_MS = 2 * 60 * 1000;   // 2 minutos
+const REFRESH_INTERVAL_MS = 60 * 1000;        // 1 minuto
+
+function resetActivityTimer(){ lastActivityTime = Date.now(); }
+
+function startActivityWatch(){
+  ['mousemove','mousedown','keydown','scroll','touchstart'].forEach(evt=>{
+    document.addEventListener(evt, resetActivityTimer);
+  });
+  lastActivityTime = Date.now();
+  inactivityIntervalId = setInterval(()=>{
+    if(currentUser && (Date.now() - lastActivityTime) > INACTIVITY_LIMIT_MS){
+      logout(true);
+    }
+  }, 10000);
+}
+
+async function backgroundRefresh(){
+  if(!currentUser) return;
+  await loadDBRemote();
+
+  // refresca las listas desplegables sin tocar lo que la persona esté editando
+  ['projectSelect','ganttProjectSelect','pdfProjectSelect'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) populateProjectSelect(el);
+  });
+  const dashSelect = document.getElementById('dashboardProjectSelect');
+  if(dashSelect) populateDashboardSelect(dashSelect);
+
+  // solo re-dibuja las vistas que son "de solo lectura" (no hay riesgo de perder algo sin guardar)
+  const activeSection = document.querySelector('.module-section.active');
+  if(!activeSection) return;
+  if(activeSection.id === 'module-4') renderDashboard();
+  if(activeSection.id === 'module-6' && currentUser.role === 'admin'){
+    loadMovementsRemote().then(renderMovements);
+  }
+}
+
+function startAutoRefresh(){
+  refreshIntervalId = setInterval(backgroundRefresh, REFRESH_INTERVAL_MS);
+}
+
+function stopBackgroundTasks(){
+  if(refreshIntervalId){ clearInterval(refreshIntervalId); refreshIntervalId = null; }
+  if(inactivityIntervalId){ clearInterval(inactivityIntervalId); inactivityIntervalId = null; }
+}
+
 /* ================= ARRANQUE: LOGIN / SESIÓN ================= */
 async function startApp(){
   document.getElementById('loginOverlay').style.display = 'none';
@@ -2196,6 +2248,8 @@ async function startApp(){
   await loadDBRemote();
   init();
   applyReadOnlyLock();
+  startActivityWatch();
+  startAutoRefresh();
 }
 
 document.getElementById('loginForm').addEventListener('submit', async function(e){
@@ -2217,7 +2271,7 @@ document.getElementById('loginForm').addEventListener('submit', async function(e
   }
 });
 
-document.getElementById('logoutBtn').addEventListener('click', logout);
+document.getElementById('logoutBtn').addEventListener('click', ()=>logout(false));
 
 restoreSession().then(ok=>{ if(ok) startApp(); });
 </script>
