@@ -660,6 +660,18 @@
     font-size:10px;
   }
 
+  .online-badge{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    font-weight:600;
+    color:var(--green);
+    background:var(--green-soft);
+    padding:6px 12px;
+    border-radius:20px;
+    white-space:nowrap;
+    cursor:default;
+  }
+
   body.role-readonly .edit-only{display:none !important;}
 
   /* Module 6 — Movimientos (solo admin) */
@@ -782,6 +794,7 @@
     <label>🎨 Fondo <input type="color" id="bgColorInput" value="#EEF2F6"></label>
     <label>🖼️ Imagen <input type="file" id="bgImageInput" accept="image/*"></label>
     <button class="reset" id="resetBg">Restablecer</button>
+    <span class="online-badge" id="onlineUsersBox">🟢 —</span>
     <span class="user-badge" id="userBadge"></span>
     <button class="reset" id="logoutBtn">Cerrar sesión</button>
   </div>
@@ -2506,9 +2519,40 @@ function startAutoRefresh(){
   refreshIntervalId = setInterval(backgroundRefresh, REFRESH_INTERVAL_MS);
 }
 
+/* ---------- usuarios en línea (Supabase Realtime Presence) ---------- */
+let presenceChannel = null;
+
+function renderOnlineUsers(state){
+  const box = document.getElementById('onlineUsersBox');
+  if(!box) return;
+  const names = [...new Set(Object.values(state).flat().map(e=>e.name))];
+  box.innerHTML = names.length
+    ? `🟢 En línea (${names.length}): ${names.map(escapeHtml).join(', ')}`
+    : '🟢 En línea';
+}
+
+function startPresence(){
+  presenceChannel = sb.channel('online-users', {
+    config: { presence: { key: currentUser.id } }
+  });
+  presenceChannel.on('presence', { event: 'sync' }, () => {
+    renderOnlineUsers(presenceChannel.presenceState());
+  });
+  presenceChannel.subscribe(async (status)=>{
+    if(status === 'SUBSCRIBED'){
+      await presenceChannel.track({ name: currentUser.displayName, role: currentUser.role });
+    }
+  });
+}
+
+function stopPresence(){
+  if(presenceChannel){ sb.removeChannel(presenceChannel); presenceChannel = null; }
+}
+
 function stopBackgroundTasks(){
   if(refreshIntervalId){ clearInterval(refreshIntervalId); refreshIntervalId = null; }
   if(inactivityIntervalId){ clearInterval(inactivityIntervalId); inactivityIntervalId = null; }
+  stopPresence();
 }
 
 /* ================= ARRANQUE: LOGIN / SESIÓN ================= */
@@ -2521,6 +2565,7 @@ async function startApp(){
   applyReadOnlyLock();
   startActivityWatch();
   startAutoRefresh();
+  startPresence();
 }
 
 document.getElementById('loginForm').addEventListener('submit', async function(e){
